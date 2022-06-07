@@ -30,19 +30,19 @@ export OOPS_TRACE=0
 yyyy=2020
 mm=12
 dd=15
-hh=00
+hh=06
 
 # Begining of the window datetime -3h
 ryyyy=2020
 rmm=12
-rdd=14
-rhh=21
+rdd=15
+rhh=03
 
 # Previous analysis restart datetime -9h
 pyyyy=2020
 pmm=12
 pdd=14
-phh=15
+phh=21
 
 # Geos experiment name and paths
 # ------------------------------
@@ -50,7 +50,7 @@ exp_id=x0044
 exp_id_length_plus_one=6
 exp_dir=x0044.jj_20220520
 exp_path=/archive/u/jjin3/
-exp_id_r2d2=x0044_jjin_20220520
+exp_id_r2d2=x0044_jjin_20220520_geovals
 
 #exp_id=x0044
 #exp_id_length_plus_one=6
@@ -69,7 +69,7 @@ ges_or_anl=ges
 # Instruments to get
 # ------------------
 instruments=*
-get_geovals=0
+get_geovals=1
 
 # Full path to ncdiag files
 # -------------------------
@@ -78,17 +78,7 @@ indir=${exp_path}/${exp_dir}/obs/Y${yyyy}/M${mm}/D${dd}/H${hh}/
 
 # R2D2 output directory
 # ---------------------
-r2d2dir=/discover/nobackup/drholdaw/JediData/GMAOReferenceRun/R2D2DataStore/Shared
-
-
-# Observation output directory
-# ----------------------------
-outdir=$r2d2dir/ncdiag/ob/${exp_id_r2d2}/PT6H/${ryyyy}-${rmm}-${rdd}
-
-
-# GeoVaLs output directory
-# ------------------------
-geodir=$r2d2dir/ncdiag/ob/${exp_id_r2d2}_geovals/PT6H/${ryyyy}-${rmm}-${rdd}
+r2d2dir=/discover/nobackup/drholdaw/JediData/GMAOReferenceRun/geos_to_r2d2/R2D2DataStore/Shared
 
 
 # Observations to skip
@@ -98,6 +88,10 @@ declare -a skips=("mls55_aura" "omi_aura" "ompsnm_npp") # Skips for ozone
 
 # Make a temporary directory and link renamed inputs
 # --------------------------------------------------
+echo " "
+echo "Linking to ncdiags"
+echo "------------------"
+
 rm -rf tmp
 mkdir -p tmp/
 pathfiles=`ls $indir/*${instruments}*${ges_or_anl}*nc4`
@@ -115,17 +109,23 @@ for pathfile in ${pathfiles}; do
     ln -sf $pathfile tmp/${filename:${exp_id_length_plus_one}:10000}
   fi
 done
+ls tmp/
 
 # Convert all obs to ioda format
 # ------------------------------
-if [[ $get_geovals == 0 ]]
-then
-  mkdir -p $outdir
-  python $jedibuild/bin/proc_gsi_ncdiag.py -o $outdir tmp/
+echo " "
+echo "Running IODA converter for ncdiags"
+echo "----------------------------------"
+
+if [[ $get_geovals == 0 ]]; then
+  rm -rf obs
+  mkdir -p obs
+  python $jedibuild/bin/proc_gsi_ncdiag.py -o obs tmp/
   proc_pass_fail=$?
 else
-  mkdir -p $outdir $geodir
-  python $jedibuild/bin/proc_gsi_ncdiag.py -o $outdir -g $geodir tmp/
+  rm -rf obs geovals
+  mkdir -p obs geovals
+  python $jedibuild/bin/proc_gsi_ncdiag.py -o obs -g geovals tmp/
   proc_pass_fail=$?
 fi
 
@@ -142,13 +142,18 @@ fi
 
 # Combine conventional obs
 # ------------------------
+echo " "
+echo "Merging conventional files"
+echo "--------------------------"
+
 declare -a conv_types=("aircraft_" "rass_" "sfc_" "sfcship_" "sondes_")
 
 # Iterate the string array using for loop
 for conv_type in ${conv_types[@]}; do
-  files=`ls $outdir/$conv_type* 2> /dev/null`
+  files=`ls obs/$conv_type* 2> /dev/null`
   if [ -n "$files" ]; then
-    $jedibuild/bin/combine_obsspace.py -i $files -o $outdir/${conv_type}obs_${yyyy}${mm}${dd}${hh}.nc4
+    echo "Combining " $conv_type
+    $jedibuild/bin/combine_obsspace.py -i $files -o obs/${conv_type}obs_${yyyy}${mm}${dd}${hh}.nc4
     if [ $? -eq 0 ]; then
       rm $files
     else
@@ -159,34 +164,60 @@ for conv_type in ${conv_types[@]}; do
 done
 
 
+# Merge GeoVaLs into obs files
+# ----------------------------
+if [[ $get_geovals == 1 ]]; then
+
+  echo " "
+  echo "Merging GeoVaLs into the observation files"
+  echo "------------------------------------------"
+
+  # nccopy all the obs files to avoid hd5 engine bug
+  rm -rf obs_
+  mv obs obs_
+  mkdir -p obs
+  pathfiles=`ls obs_/*`
+  for pathfile in ${pathfiles}; do
+    filename=$(basename "${pathfile}")
+    nccopy obs_/$filename obs/$filename
+  done
+
+  python merge_obs_and_geovals.py
+
+  rm -rf obs_
+  rm -rf geovals
+fi
+
+
 ## Convert GNSSRO from BUFR
 ## ------------------------
 #inputbufr=/archive/input/dao_ops/obs/flk/ncep_g5obs/bufr/GPSRO/Y${yyyy}/M${mm}/gdas1.${yyyy:2:4}${mm}${dd}.t${hh}z.gpsro.tm00.bufr_d
-#rm -f $outdir/gps_bend_obs_*.nc4
-#$jedibuild/bin/gnssro_bufr2ioda ${yyyy}${mm}${dd}${hh} ${inputbufr} $outdir/gnssrobndnbam_obs_${yyyy}${mm}${dd}${hh}.nc4
+#rm -f obs/gps_bend_obs_*.nc4
+#$jedibuild/bin/gnssro_bufr2ioda ${yyyy}${mm}${dd}${hh} ${inputbufr} obs/gnssrobndnbam_obs_${yyyy}${mm}${dd}${hh}.nc4
 
 
-# Rename the files with R2D2 standard
-# -----------------------------------
-rename _obs_${yyyy}${mm}${dd}${hh}.nc4 .${ryyyy}-${rmm}-${rdd}T${rhh}:00:00Z.nc4 ${outdir}/*
+# Rename the files with R2D2 standard and move to database
+# --------------------------------------------------------
+echo " "
+echo "Moving observation files into R2D2"
+echo "----------------------------------"
+outdir=$r2d2dir/ncdiag/ob/${exp_id_r2d2}/PT6H/${ryyyy}-${rmm}-${rdd}
+rm -rf $outdir
+mkdir -p $outdir
 
-pathfiles=`ls $outdir/*`
+rename _obs_${yyyy}${mm}${dd}${hh}.nc4 .${ryyyy}-${rmm}-${rdd}T${rhh}:00:00Z.nc4 obs/*
+pathfiles=`ls obs/*`
 for pathfile in ${pathfiles}; do
   filename=$(basename "${pathfile}")
   mv $pathfile $outdir/ncdiag.${exp_id_r2d2}.ob.PT6H.$filename
 done
-
-if [[ $get_geovals == 1 ]]; then
-  rename _geoval_${yyyy}${mm}${dd}${hh}.nc4 .${ryyyy}-${rmm}-${rdd}T${rhh}:00:00Z.nc4 ${geodir}/*
-  pathfiles=`ls $geodir/*`
-  for pathfile in ${pathfiles}; do
-    filename=$(basename "${pathfile}")
-    mv $pathfile $geodir/ncdiag.${exp_id_r2d2}_geovals.ob.PT6H.$filename
-  done
-fi
+ls $outdir
 
 # Convert GSI bias correction
 # ---------------------------
+echo " "
+echo "Getting bias correction coefficients"
+echo "------------------------------------"
 outdirbias=$r2d2dir/gsi/bc/${exp_id_r2d2}/${pyyyy}-${pmm}-${pdd}
 rm -rf $outdirbias
 mkdir -p $outdirbias

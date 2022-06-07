@@ -13,57 +13,64 @@ import os
 # --------------------------------------------------------------------------------------------------
 
 # Paths
-inputs_path = '/discover/nobackup/drholdaw/JediData/GMAOReferenceRun/R2D2DataStore/Shared/ncdiag/ob/x0044_jjin_20220520_geovals/PT6H/2020-12-14'
-output_path = '/discover/nobackup/drholdaw/R2D2DataStore/Shared/ncdiag/ob/x0044_jjin_20220520_geovals/PT6H/2020-12-14/'
+inputs_path = 'geovals'
+output_path = 'obs'
 
 # List of files to process
-os.chdir(inputs_path)
-files = glob.glob('*nc4')
+input_pathfiles = glob.glob(os.path.join(inputs_path,'*nc4'))
+input_pathfiles = sorted(input_pathfiles)
 
 # List of data variables that are metadata
 metadata = ['latitude', 'longitude', 'time']
 
 # Loop over files
-for file in files:
+for input_pathfile in input_pathfiles:
 
-    # Input/output pathfile
-    input_pathfile = os.path.join(inputs_path, file)
-    output_pathfile = os.path.join(output_path, file)
+    # Output filename
+    input_file = os.path.basename(input_pathfile)
+    output_file = input_file.replace('_geoval_', '_obs_')
+
+    # Output pathfile
+    output_pathfile = os.path.join(output_path, output_file)
 
     # Print info
-    print('Processing: ', file, ' to ', output_pathfile)
+    print('Merging: ', input_pathfile, ' into ', output_pathfile)
+
+    # Check output file exists
+    if not os.path.exists(output_pathfile):
+        print('          WARNING: Skipping this GeoVaLs file as no obs file found')
+        continue
 
     # Open input file
     ncstart = nc.Dataset(input_pathfile)
 
     # Create output file
-    ncfinal = nc.Dataset(output_pathfile, mode='w')
+    ncfinal = nc.Dataset(output_pathfile, mode='a')
 
     # Create dimensions
-    dim_val = ncfinal.createDimension('nlocs', ncstart.dimensions['nlocs'].size)
     for variable in list(ncstart.variables):
         if variable not in metadata:
+
+            # Add a dimension for the vertical coordinate for each GeoVaL
             if len(ncstart.variables[variable].shape) == 1:
                 dim_size = 1
             elif len(ncstart.variables[variable].shape) == 2:
                 dim_size = ncstart.variables[variable].shape[1]
             else:
                 print("Abort: Size of array not known in setting dimensions")
-            dim_val = ncfinal.createDimension(variable + '_nval', dim_size)
 
-    # Write variables for each dimension
-    for dimension in list(ncfinal.dimensions):
-        cor_val = ncfinal.createVariable(dimension, 'int32', dimension)
-        cor_val[:] = range(1, ncfinal.dimensions[dimension].size+1)
+            # Dimension name
+            dim_name = variable + '_nval'
+            dim_val = ncfinal.createDimension(dim_name, dim_size)
 
-    # Write the variables
-    for variable in list(ncstart.variables):
-        if variable in metadata:
-            cor_val = ncfinal.createVariable('MetaData/'+variable, ncstart.variables[variable].dtype, ncstart.variables[variable].dimensions)
-            cor_val[:] = ncstart.variables[variable][:]
-        else:
+            # Write variables for each dimension
+            cor_val = ncfinal.createVariable(dim_name, 'int32', dim_name)
+            cor_val[:] = range(1, ncfinal.dimensions[dim_name].size+1)
+
+            # Write the variables
             dim_array = ['nlocs', variable + '_nval']
-            cor_val = ncfinal.createVariable('GeoVaLs/'+variable, ncstart.variables[variable].dtype, dim_array)
+            cor_val = ncfinal.createVariable('GsiGeoVaLs/'+variable,
+                                             ncstart.variables[variable].dtype, dim_array)
             if len(ncstart.variables[variable].shape) == 1:
                 cor_val[:,:] = ncstart.variables[variable][:]
             else:

@@ -1,5 +1,7 @@
 # Directories
 R2D2DataStore/
+observations/obs/
+observations/geovals/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
